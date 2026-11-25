@@ -1,0 +1,844 @@
+{
+  "entities": {
+    "Project": {
+      "title": "FestivalProject",
+      "description": "University festival executive committee master board workspace",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Board display title (e.g., 第78回 蒼穹祭 実行委員会)"
+        },
+        "festivalDate": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "maxLength": 10,
+          "description": "Target festival main day in YYYY-MM-DD format"
+        },
+        "festivalEndDate": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "maxLength": 10,
+          "description": "Festival end day in YYYY-MM-DD format"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Brief overview of the festival board"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Authenticated owner UID"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp"
+        }
+      },
+      "required": ["name", "festivalDate", "festivalEndDate", "description", "ownerId", "createdAt", "updatedAt"]
+    },
+    "Bureau": {
+      "title": "FestivalBureau",
+      "description": "Committee bureau (局) containing sub-teams (担当)",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Bureau name (e.g., 総務局, 企画局)"
+        },
+        "shortName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16,
+          "description": "Abbreviated label for compact display"
+        },
+        "colorKey": {
+          "type": "string",
+          "enum": ["indigo", "teal", "amber", "rose", "violet", "sky", "emerald", "slate"],
+          "description": "Allowed semantic palette key for bureau swatch"
+        },
+        "order": {
+          "type": "number",
+          "description": "Display sort order"
+        },
+        "teams": {
+          "type": "array",
+          "description": "Bounded list of sub-teams (担当) within the bureau (max 20)"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Board owner UID"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["name", "shortName", "colorKey", "order", "teams", "ownerId", "createdAt", "updatedAt"]
+    },
+    "ProgressStage": {
+      "title": "ProgressStage",
+      "description": "Configurable multi-level progress stage (進捗段階)",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "Stage name (e.g., 企画・下準備, 局内確認中)"
+        },
+        "order": {
+          "type": "number",
+          "description": "Stage progression order"
+        },
+        "defaultPercent": {
+          "type": "number",
+          "description": "Default progress percentage 0-100"
+        },
+        "tone": {
+          "type": "string",
+          "enum": ["neutral", "info", "progress", "review", "approval", "done"],
+          "description": "Semantic stage tone"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["name", "order", "defaultPercent", "tone", "ownerId", "createdAt", "updatedAt"]
+    },
+    "FestivalTask": {
+      "title": "FestivalTask",
+      "description": "Committee task assigned to a bureau and sub-team within a project, with Gantt dates and multi-stage progress",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Task title"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Task scope and deliverables"
+        },
+        "bureauId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "teamId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "assigneeName": {
+          "type": "string",
+          "maxLength": 60,
+          "description": "Assigned person or role name"
+        },
+        "initiativeId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Parent project/initiative ID"
+        },
+        "stageId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^(|[a-zA-Z0-9_\\-]+)$",
+          "description": "Optional progress stage ID (empty string if unassigned)"
+        },
+        "progressPercent": {
+          "type": "number",
+          "description": "Numeric progress percentage 0 to 100"
+        },
+        "startDate": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "maxLength": 10
+        },
+        "endDate": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "maxLength": 10
+        },
+        "deadlineDate": {
+          "type": "string",
+          "pattern": "^(|\\d{4}-\\d{2}-\\d{2})$",
+          "maxLength": 10,
+          "description": "Optional explicit deadline date in YYYY-MM-DD format"
+        },
+        "isMilestone": {
+          "type": "boolean"
+        },
+        "isVerified": {
+          "type": "boolean"
+        },
+        "verifiedBy": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "archived"]
+        },
+        "noteIds": {
+          "type": "array",
+          "description": "Bounded list (max 100) of note IDs attached to this task for shared lookup"
+        },
+        "attachmentIds": {
+          "type": "array",
+          "description": "Bounded list (max 50) of attachment IDs attached to this task for shared lookup"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "title",
+        "description",
+        "bureauId",
+        "teamId",
+        "assigneeName",
+        "stageId",
+        "progressPercent",
+        "startDate",
+        "endDate",
+        "isMilestone",
+        "isVerified",
+        "verifiedBy",
+        "status",
+        "ownerId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "TaskAttachment": {
+      "title": "TaskAttachment",
+      "description": "Document file or reference link attached directly to a task",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["file", "link"]
+        },
+        "category": {
+          "type": "string",
+          "enum": ["plan", "budget", "layout", "permit", "reference"]
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "fileName": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "mimeType": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "fileSize": {
+          "type": "number"
+        },
+        "dataUrl": {
+          "type": "string",
+          "maxLength": 750000
+        },
+        "uploadedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "title",
+        "kind",
+        "category",
+        "url",
+        "fileName",
+        "mimeType",
+        "fileSize",
+        "dataUrl",
+        "uploadedBy",
+        "ownerId",
+        "createdAt"
+      ]
+    },
+    "Initiative": {
+      "title": "ProjectInitiative",
+      "description": "Cross-team festival project/initiative shared by multiple teams across bureaus",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "colorKey": {
+          "type": "string",
+          "enum": ["indigo", "teal", "amber", "rose", "violet", "sky", "emerald", "slate"]
+        },
+        "teamRefs": {
+          "type": "array",
+          "description": "Bounded list (max 30) of participating bureauId/teamId pairs"
+        },
+        "startDate": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "maxLength": 10
+        },
+        "endDate": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "maxLength": 10
+        },
+        "deadlineDate": {
+          "type": "string",
+          "pattern": "^(|\\d{4}-\\d{2}-\\d{2})$",
+          "maxLength": 10,
+          "description": "Optional explicit deadline date in YYYY-MM-DD format"
+        },
+        "stageId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^(|[a-zA-Z0-9_\\-]+)$"
+        },
+        "progressPercent": {
+          "type": "number"
+        },
+        "isMilestone": {
+          "type": "boolean"
+        },
+        "isVerified": {
+          "type": "boolean"
+        },
+        "verifiedBy": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "taskIds": {
+          "type": "array",
+          "description": "Bounded list (max 150) of task IDs belonging to this initiative for shared lookup"
+        },
+        "noteIds": {
+          "type": "array",
+          "description": "Bounded list (max 100) of note IDs attached to this initiative for shared lookup"
+        },
+        "publicLinkRole": {
+          "type": "string",
+          "enum": ["none", "viewer", "editor"],
+          "description": "Effective role for unauthenticated holders of an active project share link"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "colorKey",
+        "teamRefs",
+        "startDate",
+        "endDate",
+        "ownerId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "TaskNote": {
+      "title": "TaskNote",
+      "description": "Verification or progress confirmation note (non-messaging audit log)",
+      "type": "object",
+      "properties": {
+        "noteType": {
+          "type": "string",
+          "enum": ["progress_check", "approval_memo", "change_log", "pending_verify"]
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 600
+        },
+        "authorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "authorBureau": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["noteType", "content", "authorName", "authorBureau", "ownerId", "createdAt"]
+    },
+    "WorkspaceSharedConfig": {
+      "title": "WorkspaceSharedConfig",
+      "description": "Read-only board workspace snapshot (board dates, bureaus, stages) readable by shared link visitors and collaborators",
+      "type": "object",
+      "properties": {
+        "projectName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "festivalDate": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "maxLength": 10
+        },
+        "festivalEndDate": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "maxLength": 10
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "bureaus": {
+          "type": "array",
+          "description": "Bounded list (max 30) of board bureaus and teams"
+        },
+        "stages": {
+          "type": "array",
+          "description": "Bounded list (max 20) of board progress stages"
+        },
+        "hasActiveLinkShare": {
+          "type": "boolean",
+          "description": "True when at least one initiative on this board has an active link share"
+        },
+        "unassignedTaskIds": {
+          "type": "array",
+          "description": "Bounded list (max 100) of board task IDs without an initiativeId for public board link lookup"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["projectName", "festivalDate", "festivalEndDate", "description", "bureaus", "stages", "ownerId", "updatedAt"]
+    },
+    "PublicEntry": {
+      "title": "PublicEntry",
+      "description": "Configuration allowing anyone with the app URL to enter the shared board or selected projects without signing in",
+      "type": "object",
+      "properties": {
+        "projectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "projectName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "paused"]
+        },
+        "accessScope": {
+          "type": "string",
+          "enum": ["board", "selected"]
+        },
+        "role": {
+          "type": "string",
+          "enum": ["editor", "viewer"]
+        },
+        "initiativeIds": {
+          "type": "array",
+          "description": "Bounded list (max 100) of initiative IDs accessible via this public entry link"
+        },
+        "ownerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["projectId", "projectName", "status", "accessScope", "role", "initiativeIds", "ownerName", "ownerId", "createdAt", "updatedAt"]
+    },
+    "ProjectInvite": {
+      "title": "ProjectInvite",
+      "description": "Per-initiative invitation via email or shareable link code",
+      "type": "object",
+      "properties": {
+        "projectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "projectName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "initiativeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "initiativeName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "inviteType": {
+          "type": "string",
+          "enum": ["email", "link"]
+        },
+        "invitedEmail": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "role": {
+          "type": "string",
+          "enum": ["editor", "viewer"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "revoked"]
+        },
+        "ownerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "projectId",
+        "projectName",
+        "initiativeId",
+        "initiativeName",
+        "inviteType",
+        "invitedEmail",
+        "role",
+        "status",
+        "ownerName",
+        "ownerId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "InitiativeMember": {
+      "title": "InitiativeMember",
+      "description": "Membership record granting a user viewer or editor access to a specific project initiative",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "role": {
+          "type": "string",
+          "enum": ["editor", "viewer"]
+        },
+        "inviteId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "projectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "initiativeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "role",
+        "inviteId",
+        "projectId",
+        "initiativeId",
+        "ownerId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "BoardCollaborator": {
+      "title": "BoardCollaborator",
+      "description": "Gate record authorizing read access to the parent board sharedConfig for collaborators of at least one initiative",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "projectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "initiativeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "inviteId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "projectId", "initiativeId", "inviteId", "ownerId", "createdAt"]
+    },
+    "JoinedInitiative": {
+      "title": "JoinedInitiative",
+      "description": "User-private bookmark of a shared initiative the user has joined",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "projectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "projectName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "initiativeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "initiativeName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "role": {
+          "type": "string",
+          "enum": ["editor", "viewer"]
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "projectId", "projectName", "initiativeId", "initiativeName", "role", "ownerId", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/projects/{projectId}": {
+      "schema": { "$ref": "#/entities/Project" },
+      "description": "Root festival committee board workspace owned by authenticated user"
+    },
+    "/projects/{projectId}/sharedConfig/{configId}": {
+      "schema": { "$ref": "#/entities/WorkspaceSharedConfig" },
+      "description": "Shared workspace configuration snapshot readable by board collaborators and link-share visitors"
+    },
+    "/projects/{projectId}/collaborators/{collaboratorUid}": {
+      "schema": { "$ref": "#/entities/BoardCollaborator" },
+      "description": "Board-level collaborator gate linked to active initiative membership"
+    },
+    "/projects/{projectId}/bureaus/{bureauId}": {
+      "schema": { "$ref": "#/entities/Bureau" },
+      "description": "Bureaus (局) and sub-teams (担当) under a board"
+    },
+    "/projects/{projectId}/initiatives/{initiativeId}": {
+      "schema": { "$ref": "#/entities/Initiative" },
+      "description": "Individual festival projects shared across multiple teams"
+    },
+    "/projects/{projectId}/initiatives/{initiativeId}/members/{memberUid}": {
+      "schema": { "$ref": "#/entities/InitiativeMember" },
+      "description": "Per-project shared member access roles (editor or viewer)"
+    },
+    "/projects/{projectId}/initiatives/{initiativeId}/notes/{noteId}": {
+      "schema": { "$ref": "#/entities/TaskNote" },
+      "description": "Confirmation and verification notes attached directly to a project"
+    },
+    "/projects/{projectId}/stages/{stageId}": {
+      "schema": { "$ref": "#/entities/ProgressStage" },
+      "description": "Multi-stage progress definitions under a board"
+    },
+    "/projects/{projectId}/tasks/{taskId}": {
+      "schema": { "$ref": "#/entities/FestivalTask" },
+      "description": "Team-specific tasks inside projects under a board"
+    },
+    "/projects/{projectId}/tasks/{taskId}/notes/{noteId}": {
+      "schema": { "$ref": "#/entities/TaskNote" },
+      "description": "Confirmation and verification notes attached to a task"
+    },
+    "/projects/{projectId}/tasks/{taskId}/attachments/{attachmentId}": {
+      "schema": { "$ref": "#/entities/TaskAttachment" },
+      "description": "Attached documents, files, and reference links under a task"
+    },
+    "/publicEntry/{entryId}": {
+      "schema": { "$ref": "#/entities/PublicEntry" },
+      "description": "Direct link-entry configuration allowing visitors with the app URL to enter without signing in"
+    },
+    "/projectInvites/{inviteId}": {
+      "schema": { "$ref": "#/entities/ProjectInvite" },
+      "description": "Per-project sharing invites addressed by verified email or secret link ID"
+    },
+    "/users/{userId}/joinedInitiatives/{joinId}": {
+      "schema": { "$ref": "#/entities/JoinedInitiative" },
+      "description": "Private list of shared projects joined by the authenticated user"
+    }
+  }
+}

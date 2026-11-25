@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", "Zen Kaku Gothic New", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    font-feature-settings: "palt";
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Subtle horizontal scrollbar for Gantt timeline */
+.gantt-scroll::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+.gantt-scroll::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+.gantt-scroll::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 5px;
+  border: 2px solid #f1f5f9;
+}
+
+.gantt-scroll::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}

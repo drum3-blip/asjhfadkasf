@@ -1,0 +1,6 @@
+{
+  "name": "実行委員会 進捗統合ボード",
+  "description": "大学祭実行委員会向けの複数局・担当階層対応タスク管理ツール。ガントチャート、複数段階の進捗可視化、全体カレンダー、確認用コメント記録を一元管理します。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

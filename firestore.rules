@@ -1,0 +1,964 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function hasVerifiedEmail() {
+      return isSignedIn() && 'email' in request.auth.token && request.auth.token.email is string;
+    }
+
+    function isValidActorOwner(ownerIdField) {
+      return (isSignedIn() && ownerIdField == request.auth.uid)
+        || (request.auth == null && ownerIdField == 'guest_link');
+    }
+
+    function isDateStr(val) {
+      return val is string && val.size() == 10 && val.matches('^\\d{4}-\\d{2}-\\d{2}$');
+    }
+
+    function isValidIdList(listVal, maxLen) {
+      return listVal is list
+        && listVal.size() <= maxLen
+        && (listVal.size() == 0 || isValidId(listVal[0]));
+    }
+
+    // Role & Membership Lookups (Only for get / create / update / delete; NEVER in list)
+    function isBoardOwner(projectId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/projects/$(projectId))
+        && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == request.auth.uid;
+    }
+
+    function isBoardCollaborator(projectId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/projects/$(projectId)/collaborators/$(request.auth.uid));
+    }
+
+    function isInitiativeMember(projectId, initiativeId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/projects/$(projectId)/initiatives/$(initiativeId)/members/$(request.auth.uid));
+    }
+
+    function isInitiativeEditor(projectId, initiativeId) {
+      return isInitiativeMember(projectId, initiativeId)
+        && get(/databases/$(database)/documents/projects/$(projectId)/initiatives/$(initiativeId)/members/$(request.auth.uid)).data.role == 'editor';
+    }
+
+    // Direct-Link Public Entry Lookups (for visitors without sign-in)
+    function hasPublicEntryForProject(projectId) {
+      return exists(/databases/$(database)/documents/publicEntry/default)
+        && get(/databases/$(database)/documents/publicEntry/default).data.status == 'active'
+        && get(/databases/$(database)/documents/publicEntry/default).data.projectId == projectId;
+    }
+
+    function isPublicEntryBoardReader(projectId) {
+      return hasPublicEntryForProject(projectId)
+        && get(/databases/$(database)/documents/publicEntry/default).data.accessScope == 'board';
+    }
+
+    function isPublicEntryBoardEditor(projectId) {
+      return isPublicEntryBoardReader(projectId)
+        && get(/databases/$(database)/documents/publicEntry/default).data.role == 'editor';
+    }
+
+    function isPublicEntryInitiative(projectId, initiativeId) {
+      return hasPublicEntryForProject(projectId)
+        && (
+          get(/databases/$(database)/documents/publicEntry/default).data.accessScope == 'board'
+          || initiativeId in get(/databases/$(database)/documents/publicEntry/default).data.initiativeIds
+        );
+    }
+
+    function isPublicEntryInitiativeEditor(projectId, initiativeId) {
+      return isPublicEntryInitiative(projectId, initiativeId)
+        && get(/databases/$(database)/documents/publicEntry/default).data.role == 'editor';
+    }
+
+    // Per-Initiative Secret Share Link Lookups (for ?invite= link holders without sign-in)
+    function hasInitiativePublicLinkReader(projectId, initiativeId) {
+      return exists(/databases/$(database)/documents/projects/$(projectId)/initiatives/$(initiativeId))
+        && 'publicLinkRole' in get(/databases/$(database)/documents/projects/$(projectId)/initiatives/$(initiativeId)).data
+        && get(/databases/$(database)/documents/projects/$(projectId)/initiatives/$(initiativeId)).data.publicLinkRole in ['viewer', 'editor'];
+    }
+
+    function hasInitiativePublicLinkEditor(projectId, initiativeId) {
+      return exists(/databases/$(database)/documents/projects/$(projectId)/initiatives/$(initiativeId))
+        && 'publicLinkRole' in get(/databases/$(database)/documents/projects/$(projectId)/initiatives/$(initiativeId)).data
+        && get(/databases/$(database)/documents/projects/$(projectId)/initiatives/$(initiativeId)).data.publicLinkRole == 'editor';
+    }
+
+    function canReadTask(projectId, taskId) {
+      return exists(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId))
+        && (
+          (isSignedIn() && get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data.ownerId == request.auth.uid)
+          || isBoardOwner(projectId)
+          || isPublicEntryBoardReader(projectId)
+          || (
+            'initiativeId' in get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data
+            && get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data.initiativeId is string
+            && get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data.initiativeId != ''
+            && (
+              isInitiativeMember(projectId, get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data.initiativeId)
+              || isPublicEntryInitiative(projectId, get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data.initiativeId)
+              || hasInitiativePublicLinkReader(projectId, get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data.initiativeId)
+            )
+          )
+        );
+    }
+
+    function canEditTask(projectId, taskId) {
+      return exists(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId))
+        && (
+          isBoardOwner(projectId)
+          || isPublicEntryBoardEditor(projectId)
+          || (
+            'initiativeId' in get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data
+            && get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data.initiativeId is string
+            && get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data.initiativeId != ''
+            && (
+              isInitiativeEditor(projectId, get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data.initiativeId)
+              || isPublicEntryInitiativeEditor(projectId, get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data.initiativeId)
+              || hasInitiativePublicLinkEditor(projectId, get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data.initiativeId)
+            )
+          )
+        );
+    }
+
+    // Entity Validators
+    function isValidProject(data) {
+      return data.keys().hasAll(['name', 'festivalDate', 'festivalEndDate', 'description', 'ownerId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['name', 'festivalDate', 'festivalEndDate', 'description', 'ownerId', 'createdAt', 'updatedAt'])
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
+        && isDateStr(data.festivalDate)
+        && isDateStr(data.festivalEndDate)
+        && data.festivalDate <= data.festivalEndDate
+        && data.description is string && data.description.size() <= 500
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTeamItem(item) {
+      return item is map
+        && item.keys().hasAll(['id', 'name'])
+        && item.keys().hasOnly(['id', 'name'])
+        && isValidId(item.id)
+        && item.name is string && item.name.size() >= 1 && item.name.size() <= 60;
+    }
+
+    function isValidBureau(data) {
+      return data.keys().hasAll(['name', 'shortName', 'colorKey', 'order', 'teams', 'ownerId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['name', 'shortName', 'colorKey', 'order', 'teams', 'ownerId', 'createdAt', 'updatedAt'])
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 60
+        && data.shortName is string && data.shortName.size() >= 1 && data.shortName.size() <= 16
+        && data.colorKey in ['indigo', 'teal', 'amber', 'rose', 'violet', 'sky', 'emerald', 'slate']
+        && data.order is number && data.order >= 0 && data.order <= 1000
+        && data.teams is list && data.teams.size() <= 20
+        && (data.teams.size() == 0 || isValidTeamItem(data.teams[0]))
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTeamRef(item) {
+      return item is map
+        && item.keys().hasAll(['bureauId', 'teamId'])
+        && item.keys().hasOnly(['bureauId', 'teamId'])
+        && isValidId(item.bureauId)
+        && isValidId(item.teamId);
+    }
+
+    function isValidInitiative(data) {
+      return data.keys().hasAll(['name', 'description', 'colorKey', 'teamRefs', 'startDate', 'endDate', 'ownerId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'name', 'description', 'colorKey', 'teamRefs', 'startDate', 'endDate', 'deadlineDate',
+          'stageId', 'progressPercent', 'isMilestone', 'isVerified', 'verifiedBy',
+          'taskIds', 'noteIds', 'publicLinkRole', 'ownerId', 'createdAt', 'updatedAt'
+        ])
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
+        && data.description is string && data.description.size() <= 500
+        && data.colorKey in ['indigo', 'teal', 'amber', 'rose', 'violet', 'sky', 'emerald', 'slate']
+        && data.teamRefs is list && data.teamRefs.size() <= 30
+        && (data.teamRefs.size() == 0 || isValidTeamRef(data.teamRefs[0]))
+        && isDateStr(data.startDate)
+        && isDateStr(data.endDate)
+        && data.startDate <= data.endDate
+        && (!('deadlineDate' in data) || (data.deadlineDate is string && (data.deadlineDate == '' || isDateStr(data.deadlineDate))))
+        && (!('stageId' in data) || (data.stageId is string && (data.stageId == '' || isValidId(data.stageId))))
+        && (!('progressPercent' in data) || (data.progressPercent is number && data.progressPercent >= 0 && data.progressPercent <= 100))
+        && (!('isMilestone' in data) || data.isMilestone is bool)
+        && (!('isVerified' in data) || data.isVerified is bool)
+        && (!('verifiedBy' in data) || (data.verifiedBy is string && data.verifiedBy.size() <= 60))
+        && (!('taskIds' in data) || isValidIdList(data.taskIds, 150))
+        && (!('noteIds' in data) || isValidIdList(data.noteIds, 100))
+        && (!('publicLinkRole' in data) || data.publicLinkRole in ['none', 'viewer', 'editor'])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStage(data) {
+      return data.keys().hasAll(['name', 'order', 'defaultPercent', 'tone', 'ownerId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['name', 'order', 'defaultPercent', 'tone', 'ownerId', 'createdAt', 'updatedAt'])
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 40
+        && data.order is number && data.order >= 0 && data.order <= 100
+        && data.defaultPercent is number && data.defaultPercent >= 0 && data.defaultPercent <= 100
+        && data.tone in ['neutral', 'info', 'progress', 'review', 'approval', 'done']
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTask(data) {
+      return data.keys().hasAll([
+          'title', 'description', 'bureauId', 'teamId', 'assigneeName',
+          'stageId', 'progressPercent', 'startDate', 'endDate',
+          'isMilestone', 'isVerified', 'verifiedBy', 'status',
+          'ownerId', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'title', 'description', 'bureauId', 'teamId', 'assigneeName',
+          'initiativeId', 'stageId', 'progressPercent', 'startDate', 'endDate', 'deadlineDate',
+          'isMilestone', 'isVerified', 'verifiedBy', 'status',
+          'noteIds', 'attachmentIds', 'ownerId', 'createdAt', 'updatedAt'
+        ])
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
+        && data.description is string && data.description.size() <= 1000
+        && isValidId(data.bureauId)
+        && isValidId(data.teamId)
+        && data.assigneeName is string && data.assigneeName.size() <= 60
+        && (!('initiativeId' in data) || (data.initiativeId is string && (data.initiativeId == '' || isValidId(data.initiativeId))))
+        && data.stageId is string && (data.stageId == '' || isValidId(data.stageId))
+        && data.progressPercent is number && data.progressPercent >= 0 && data.progressPercent <= 100
+        && isDateStr(data.startDate)
+        && isDateStr(data.endDate)
+        && data.startDate <= data.endDate
+        && (!('deadlineDate' in data) || (data.deadlineDate is string && (data.deadlineDate == '' || isDateStr(data.deadlineDate))))
+        && data.isMilestone is bool
+        && data.isVerified is bool
+        && data.verifiedBy is string && data.verifiedBy.size() <= 60
+        && data.status in ['active', 'archived']
+        && (!('noteIds' in data) || isValidIdList(data.noteIds, 100))
+        && (!('attachmentIds' in data) || isValidIdList(data.attachmentIds, 50))
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidNote(data) {
+      return data.keys().hasAll(['noteType', 'content', 'authorName', 'authorBureau', 'ownerId', 'createdAt'])
+        && data.keys().hasOnly(['noteType', 'content', 'authorName', 'authorBureau', 'ownerId', 'createdAt'])
+        && data.noteType in ['progress_check', 'approval_memo', 'change_log', 'pending_verify']
+        && data.content is string && data.content.size() >= 1 && data.content.size() <= 600
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 60
+        && data.authorBureau is string && data.authorBureau.size() <= 60
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.createdAt is timestamp;
+    }
+
+    function isValidAttachment(data) {
+      return data.keys().hasAll([
+          'title', 'kind', 'category', 'url', 'fileName', 'mimeType',
+          'fileSize', 'dataUrl', 'uploadedBy', 'ownerId', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'title', 'kind', 'category', 'url', 'fileName', 'mimeType',
+          'fileSize', 'dataUrl', 'uploadedBy', 'ownerId', 'createdAt'
+        ])
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
+        && data.kind in ['file', 'link']
+        && data.category in ['plan', 'budget', 'layout', 'permit', 'reference']
+        && data.url is string && data.url.size() <= 1000
+        && data.fileName is string && data.fileName.size() <= 180
+        && data.mimeType is string && data.mimeType.size() <= 120
+        && data.fileSize is number && data.fileSize >= 0 && data.fileSize <= 550000
+        && data.dataUrl is string && data.dataUrl.size() <= 750000
+        && data.uploadedBy is string && data.uploadedBy.size() >= 1 && data.uploadedBy.size() <= 60
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSharedBureauItem(item) {
+      return item is map
+        && item.keys().hasAll(['id', 'name', 'shortName', 'colorKey', 'order', 'teams'])
+        && item.keys().hasOnly(['id', 'name', 'shortName', 'colorKey', 'order', 'teams'])
+        && isValidId(item.id)
+        && item.name is string && item.name.size() >= 1 && item.name.size() <= 60
+        && item.shortName is string && item.shortName.size() >= 1 && item.shortName.size() <= 16
+        && item.colorKey in ['indigo', 'teal', 'amber', 'rose', 'violet', 'sky', 'emerald', 'slate']
+        && item.order is number && item.order >= 0 && item.order <= 1000
+        && item.teams is list && item.teams.size() <= 20
+        && (item.teams.size() == 0 || isValidTeamItem(item.teams[0]));
+    }
+
+    function isValidSharedStageItem(item) {
+      return item is map
+        && item.keys().hasAll(['id', 'name', 'order', 'defaultPercent', 'tone'])
+        && item.keys().hasOnly(['id', 'name', 'order', 'defaultPercent', 'tone'])
+        && isValidId(item.id)
+        && item.name is string && item.name.size() >= 1 && item.name.size() <= 40
+        && item.order is number && item.order >= 0 && item.order <= 100
+        && item.defaultPercent is number && item.defaultPercent >= 0 && item.defaultPercent <= 100
+        && item.tone in ['neutral', 'info', 'progress', 'review', 'approval', 'done'];
+    }
+
+    function isValidSharedConfig(data) {
+      return data.keys().hasAll(['projectName', 'festivalDate', 'festivalEndDate', 'description', 'bureaus', 'stages', 'ownerId', 'updatedAt'])
+        && data.keys().hasOnly([
+          'projectName', 'festivalDate', 'festivalEndDate', 'description',
+          'bureaus', 'stages', 'hasActiveLinkShare', 'unassignedTaskIds', 'ownerId', 'updatedAt'
+        ])
+        && data.projectName is string && data.projectName.size() >= 1 && data.projectName.size() <= 100
+        && isDateStr(data.festivalDate)
+        && isDateStr(data.festivalEndDate)
+        && data.festivalDate <= data.festivalEndDate
+        && data.description is string && data.description.size() <= 500
+        && data.bureaus is list && data.bureaus.size() <= 30
+        && (data.bureaus.size() == 0 || isValidSharedBureauItem(data.bureaus[0]))
+        && data.stages is list && data.stages.size() <= 20
+        && (data.stages.size() == 0 || isValidSharedStageItem(data.stages[0]))
+        && (!('hasActiveLinkShare' in data) || data.hasActiveLinkShare is bool)
+        && (!('unassignedTaskIds' in data) || isValidIdList(data.unassignedTaskIds, 100))
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPublicEntry(data) {
+      return data.keys().hasAll([
+          'projectId', 'projectName', 'status', 'accessScope',
+          'role', 'initiativeIds', 'ownerName', 'ownerId', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'projectId', 'projectName', 'status', 'accessScope',
+          'role', 'initiativeIds', 'ownerName', 'ownerId', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.projectId)
+        && data.projectName is string && data.projectName.size() >= 1 && data.projectName.size() <= 100
+        && data.status in ['active', 'paused']
+        && data.accessScope in ['board', 'selected']
+        && data.role in ['editor', 'viewer']
+        && isValidIdList(data.initiativeIds, 100)
+        && data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 60
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidProjectInvite(data) {
+      return data.keys().hasAll([
+          'projectId', 'projectName', 'initiativeId', 'initiativeName',
+          'inviteType', 'invitedEmail', 'role', 'status', 'ownerName',
+          'ownerId', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'projectId', 'projectName', 'initiativeId', 'initiativeName',
+          'inviteType', 'invitedEmail', 'role', 'status', 'ownerName',
+          'ownerId', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.projectId)
+        && data.projectName is string && data.projectName.size() >= 1 && data.projectName.size() <= 100
+        && isValidId(data.initiativeId)
+        && data.initiativeName is string && data.initiativeName.size() >= 1 && data.initiativeName.size() <= 100
+        && data.inviteType in ['email', 'link']
+        && data.invitedEmail is string && data.invitedEmail.size() <= 160
+        && (
+          (data.inviteType == 'link' && data.invitedEmail == '')
+          || (data.inviteType == 'email' && data.invitedEmail.size() >= 3 && data.invitedEmail.matches('^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$'))
+        )
+        && data.role in ['editor', 'viewer']
+        && data.status in ['active', 'revoked']
+        && data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 60
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidInitiativeMember(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'role', 'inviteId', 'projectId', 'initiativeId', 'ownerId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'role', 'inviteId', 'projectId', 'initiativeId', 'ownerId', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60
+        && data.role in ['editor', 'viewer']
+        && isValidId(data.inviteId)
+        && isValidId(data.projectId)
+        && isValidId(data.initiativeId)
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBoardCollaborator(data) {
+      return data.keys().hasAll(['uid', 'projectId', 'initiativeId', 'inviteId', 'ownerId', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'projectId', 'initiativeId', 'inviteId', 'ownerId', 'createdAt'])
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
+        && isValidId(data.projectId)
+        && isValidId(data.initiativeId)
+        && isValidId(data.inviteId)
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.createdAt is timestamp;
+    }
+
+    function isValidJoinedInitiative(data) {
+      return data.keys().hasAll(['uid', 'projectId', 'projectName', 'initiativeId', 'initiativeName', 'role', 'ownerId', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'projectId', 'projectName', 'initiativeId', 'initiativeName', 'role', 'ownerId', 'createdAt'])
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
+        && isValidId(data.projectId)
+        && data.projectName is string && data.projectName.size() >= 1 && data.projectName.size() <= 100
+        && isValidId(data.initiativeId)
+        && data.initiativeName is string && data.initiativeName.size() >= 1 && data.initiativeName.size() <= 100
+        && data.role in ['editor', 'viewer']
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.createdAt is timestamp;
+    }
+
+    // Root Projects (Boards) Collection
+    match /projects/{projectId} {
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow get: if isSignedIn() && isValidId(projectId) && existing().ownerId == request.auth.uid;
+      allow create: if isSignedIn()
+        && isValidId(projectId)
+        && isValidProject(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isSignedIn()
+        && isValidId(projectId)
+        && isValidProject(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'festivalDate', 'festivalEndDate', 'description', 'updatedAt']);
+      allow delete: if isSignedIn() && isValidId(projectId) && existing().ownerId == request.auth.uid;
+
+      // Read-Only Shared Workspace Snapshot (readable by BoardCollaborators and link visitors)
+      match /sharedConfig/{configId} {
+        allow list: if false;
+        allow get: if isValidId(projectId)
+          && configId == 'workspace'
+          && (
+            (isSignedIn() && (existing().ownerId == request.auth.uid || isBoardCollaborator(projectId)))
+            || hasPublicEntryForProject(projectId)
+            || ('hasActiveLinkShare' in existing() && existing().hasActiveLinkShare == true)
+          );
+        allow create: if isSignedIn()
+          && isValidId(projectId)
+          && configId == 'workspace'
+          && isValidSharedConfig(incoming())
+          && incoming().ownerId == request.auth.uid
+          && incoming().updatedAt == request.time
+          && isBoardOwner(projectId);
+        allow update: if isValidId(projectId)
+          && configId == 'workspace'
+          && isValidSharedConfig(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().updatedAt == request.time
+          && (
+            (
+              isSignedIn()
+              && existing().ownerId == request.auth.uid
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'projectName', 'festivalDate', 'festivalEndDate', 'description',
+                'bureaus', 'stages', 'hasActiveLinkShare', 'unassignedTaskIds', 'updatedAt'
+              ])
+            )
+            || (
+              isPublicEntryBoardEditor(projectId)
+              && incoming().diff(existing()).affectedKeys().hasOnly(['unassignedTaskIds', 'updatedAt'])
+            )
+          );
+        allow delete: if isSignedIn() && isValidId(projectId) && configId == 'workspace' && existing().ownerId == request.auth.uid;
+      }
+
+      // Board-Level Collaborator Gate
+      match /collaborators/{collaboratorUid} {
+        allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(projectId) && isValidId(collaboratorUid) && (existing().ownerId == request.auth.uid || collaboratorUid == request.auth.uid);
+        allow create: if isSignedIn()
+          && isValidId(projectId)
+          && isValidId(collaboratorUid)
+          && collaboratorUid == request.auth.uid
+          && isValidBoardCollaborator(incoming())
+          && incoming().uid == request.auth.uid
+          && incoming().projectId == projectId
+          && incoming().createdAt == request.time
+          && existsAfter(/databases/$(database)/documents/projects/$(projectId)/initiatives/$(incoming().initiativeId)/members/$(request.auth.uid));
+        allow update: if false;
+        allow delete: if isSignedIn() && isValidId(projectId) && isValidId(collaboratorUid) && (existing().ownerId == request.auth.uid || collaboratorUid == request.auth.uid);
+      }
+
+      // Bureaus Subcollection
+      match /bureaus/{bureauId} {
+        allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(projectId) && isValidId(bureauId) && existing().ownerId == request.auth.uid;
+        allow create: if isSignedIn()
+          && isValidId(projectId)
+          && isValidId(bureauId)
+          && isValidBureau(incoming())
+          && incoming().ownerId == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isBoardOwner(projectId);
+        allow update: if isSignedIn()
+          && isValidId(projectId)
+          && isValidId(bureauId)
+          && isValidBureau(incoming())
+          && existing().ownerId == request.auth.uid
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'shortName', 'colorKey', 'order', 'teams', 'updatedAt']);
+        allow delete: if isSignedIn() && isValidId(projectId) && isValidId(bureauId) && existing().ownerId == request.auth.uid;
+      }
+
+      // Cross-team Initiatives / Sub-projects Subcollection
+      match /initiatives/{initiativeId} {
+        allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+        allow get: if isValidId(projectId)
+          && isValidId(initiativeId)
+          && (
+            (isSignedIn() && (existing().ownerId == request.auth.uid || isInitiativeMember(projectId, initiativeId)))
+            || isPublicEntryInitiative(projectId, initiativeId)
+            || ('publicLinkRole' in existing() && existing().publicLinkRole in ['viewer', 'editor'])
+          );
+        allow create: if isSignedIn()
+          && isValidId(projectId)
+          && isValidId(initiativeId)
+          && isValidInitiative(incoming())
+          && incoming().ownerId == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isBoardOwner(projectId);
+        allow update: if isValidId(projectId)
+          && isValidId(initiativeId)
+          && isValidInitiative(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            (
+              isSignedIn()
+              && existing().ownerId == request.auth.uid
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'name', 'description', 'colorKey', 'teamRefs', 'startDate', 'endDate', 'deadlineDate',
+                'stageId', 'progressPercent', 'isMilestone', 'isVerified', 'verifiedBy',
+                'taskIds', 'noteIds', 'publicLinkRole', 'updatedAt'
+              ])
+            )
+            || (
+              (
+                isInitiativeEditor(projectId, initiativeId)
+                || isPublicEntryInitiativeEditor(projectId, initiativeId)
+                || ('publicLinkRole' in existing() && existing().publicLinkRole == 'editor')
+              )
+              && (
+                incoming().diff(existing()).affectedKeys().hasOnly(['stageId', 'progressPercent', 'updatedAt'])
+                ||
+                incoming().diff(existing()).affectedKeys().hasOnly(['isVerified', 'verifiedBy', 'updatedAt'])
+                ||
+                incoming().diff(existing()).affectedKeys().hasOnly(['taskIds', 'updatedAt'])
+                ||
+                incoming().diff(existing()).affectedKeys().hasOnly(['noteIds', 'updatedAt'])
+                ||
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'name', 'description', 'colorKey', 'teamRefs', 'startDate', 'endDate', 'deadlineDate',
+                  'stageId', 'progressPercent', 'isMilestone', 'isVerified', 'verifiedBy', 'taskIds', 'noteIds', 'updatedAt'
+                ])
+              )
+            )
+          );
+        allow delete: if isSignedIn() && isValidId(projectId) && isValidId(initiativeId) && existing().ownerId == request.auth.uid;
+
+        // Per-Initiative Members Subcollection
+        match /members/{memberUid} {
+          allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+          allow get: if isSignedIn()
+            && isValidId(projectId)
+            && isValidId(initiativeId)
+            && isValidId(memberUid)
+            && (existing().ownerId == request.auth.uid || memberUid == request.auth.uid || isInitiativeMember(projectId, initiativeId));
+          allow create: if isSignedIn()
+            && isValidId(projectId)
+            && isValidId(initiativeId)
+            && isValidId(memberUid)
+            && memberUid == request.auth.uid
+            && isValidInitiativeMember(incoming())
+            && incoming().uid == request.auth.uid
+            && incoming().projectId == projectId
+            && incoming().initiativeId == initiativeId
+            && incoming().createdAt == request.time
+            && incoming().updatedAt == request.time
+            && exists(/databases/$(database)/documents/projectInvites/$(incoming().inviteId))
+            && get(/databases/$(database)/documents/projectInvites/$(incoming().inviteId)).data.status == 'active'
+            && get(/databases/$(database)/documents/projectInvites/$(incoming().inviteId)).data.projectId == projectId
+            && get(/databases/$(database)/documents/projectInvites/$(incoming().inviteId)).data.initiativeId == initiativeId
+            && get(/databases/$(database)/documents/projectInvites/$(incoming().inviteId)).data.ownerId == incoming().ownerId
+            && get(/databases/$(database)/documents/projectInvites/$(incoming().inviteId)).data.role == incoming().role
+            && (
+              get(/databases/$(database)/documents/projectInvites/$(incoming().inviteId)).data.inviteType == 'link'
+              || (hasVerifiedEmail() && get(/databases/$(database)/documents/projectInvites/$(incoming().inviteId)).data.invitedEmail == request.auth.token.email.lower())
+            )
+            && existsAfter(/databases/$(database)/documents/projects/$(projectId)/collaborators/$(request.auth.uid))
+            && existsAfter(/databases/$(database)/documents/users/$(request.auth.uid)/joinedInitiatives/$(projectId + '__' + initiativeId));
+          allow update: if isSignedIn()
+            && isValidId(projectId)
+            && isValidId(initiativeId)
+            && isValidId(memberUid)
+            && isValidInitiativeMember(incoming())
+            && existing().ownerId == request.auth.uid
+            && incoming().ownerId == existing().ownerId
+            && incoming().uid == existing().uid
+            && incoming().projectId == existing().projectId
+            && incoming().initiativeId == existing().initiativeId
+            && incoming().inviteId == existing().inviteId
+            && incoming().createdAt == existing().createdAt
+            && incoming().updatedAt == request.time
+            && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'updatedAt']);
+          allow delete: if isSignedIn()
+            && isValidId(projectId)
+            && isValidId(initiativeId)
+            && isValidId(memberUid)
+            && (existing().ownerId == request.auth.uid || memberUid == request.auth.uid);
+        }
+
+        // Project Confirmation Notes Subcollection
+        match /notes/{noteId} {
+          allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+          allow get: if isValidId(projectId)
+            && isValidId(initiativeId)
+            && isValidId(noteId)
+            && (
+              (isSignedIn() && (existing().ownerId == request.auth.uid || isBoardOwner(projectId) || isInitiativeMember(projectId, initiativeId)))
+              || isPublicEntryInitiative(projectId, initiativeId)
+              || hasInitiativePublicLinkReader(projectId, initiativeId)
+            );
+          allow create: if isValidId(projectId)
+            && isValidId(initiativeId)
+            && isValidId(noteId)
+            && isValidNote(incoming())
+            && isValidActorOwner(incoming().ownerId)
+            && incoming().createdAt == request.time
+            && (
+              isBoardOwner(projectId)
+              || isInitiativeEditor(projectId, initiativeId)
+              || isPublicEntryInitiativeEditor(projectId, initiativeId)
+              || hasInitiativePublicLinkEditor(projectId, initiativeId)
+            );
+          allow update: if false;
+          allow delete: if isValidId(projectId)
+            && isValidId(initiativeId)
+            && isValidId(noteId)
+            && (
+              (isSignedIn() && (existing().ownerId == request.auth.uid || isBoardOwner(projectId)))
+              || isInitiativeEditor(projectId, initiativeId)
+              || isPublicEntryInitiativeEditor(projectId, initiativeId)
+              || hasInitiativePublicLinkEditor(projectId, initiativeId)
+            );
+        }
+      }
+
+      // Progress Stages Subcollection
+      match /stages/{stageId} {
+        allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(projectId) && isValidId(stageId) && existing().ownerId == request.auth.uid;
+        allow create: if isSignedIn()
+          && isValidId(projectId)
+          && isValidId(stageId)
+          && isValidStage(incoming())
+          && incoming().ownerId == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isBoardOwner(projectId);
+        allow update: if isSignedIn()
+          && isValidId(projectId)
+          && isValidId(stageId)
+          && isValidStage(incoming())
+          && existing().ownerId == request.auth.uid
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'order', 'defaultPercent', 'tone', 'updatedAt']);
+        allow delete: if isSignedIn() && isValidId(projectId) && isValidId(stageId) && existing().ownerId == request.auth.uid;
+      }
+
+      // Tasks Subcollection
+      match /tasks/{taskId} {
+        allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+        allow get: if isValidId(projectId)
+          && isValidId(taskId)
+          && (
+            (isSignedIn() && (existing().ownerId == request.auth.uid || isBoardOwner(projectId)))
+            || isPublicEntryBoardReader(projectId)
+            || (
+              'initiativeId' in existing()
+              && existing().initiativeId is string
+              && existing().initiativeId != ''
+              && (
+                isInitiativeMember(projectId, existing().initiativeId)
+                || isPublicEntryInitiative(projectId, existing().initiativeId)
+                || hasInitiativePublicLinkReader(projectId, existing().initiativeId)
+              )
+            )
+          );
+        allow create: if isValidId(projectId)
+          && isValidId(taskId)
+          && isValidTask(incoming())
+          && isValidActorOwner(incoming().ownerId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && (
+            isBoardOwner(projectId)
+            || isPublicEntryBoardEditor(projectId)
+            || (
+              'initiativeId' in incoming()
+              && incoming().initiativeId is string
+              && incoming().initiativeId != ''
+              && (
+                isInitiativeEditor(projectId, incoming().initiativeId)
+                || isPublicEntryInitiativeEditor(projectId, incoming().initiativeId)
+                || hasInitiativePublicLinkEditor(projectId, incoming().initiativeId)
+              )
+            )
+          );
+        allow update: if isValidId(projectId)
+          && isValidId(taskId)
+          && isValidTask(incoming())
+          && existing().status == 'active'
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isBoardOwner(projectId)
+            || (
+              isPublicEntryBoardEditor(projectId)
+              && (
+                !('initiativeId' in incoming())
+                || incoming().initiativeId == existing().initiativeId
+                || incoming().initiativeId == ''
+                || isPublicEntryInitiativeEditor(projectId, incoming().initiativeId)
+              )
+            )
+            || (
+              'initiativeId' in existing()
+              && existing().initiativeId is string
+              && existing().initiativeId != ''
+              && (
+                isInitiativeEditor(projectId, existing().initiativeId)
+                || isPublicEntryInitiativeEditor(projectId, existing().initiativeId)
+                || hasInitiativePublicLinkEditor(projectId, existing().initiativeId)
+              )
+              && (!('initiativeId' in incoming()) || incoming().initiativeId == existing().initiativeId)
+            )
+          )
+          && (
+            // Action: Quick Progress & Stage Update
+            incoming().diff(existing()).affectedKeys().hasOnly(['stageId', 'progressPercent', 'updatedAt'])
+            ||
+            // Action: Verification Stamp Update
+            incoming().diff(existing()).affectedKeys().hasOnly(['isVerified', 'verifiedBy', 'updatedAt'])
+            ||
+            // Action: Timeline Date Adjustment
+            incoming().diff(existing()).affectedKeys().hasOnly(['startDate', 'endDate', 'deadlineDate', 'updatedAt'])
+            ||
+            // Action: Note & Attachment Index Maintenance
+            incoming().diff(existing()).affectedKeys().hasOnly(['noteIds', 'updatedAt'])
+            ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['attachmentIds', 'updatedAt'])
+            ||
+            // Action: Full Task Edit or Archive
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'description', 'bureauId', 'teamId', 'assigneeName',
+              'initiativeId', 'stageId', 'progressPercent', 'startDate', 'endDate', 'deadlineDate',
+              'isMilestone', 'isVerified', 'verifiedBy', 'status', 'noteIds', 'attachmentIds', 'updatedAt'
+            ])
+          );
+        allow delete: if isValidId(projectId)
+          && isValidId(taskId)
+          && (
+            (isSignedIn() && (existing().ownerId == request.auth.uid || isBoardOwner(projectId)))
+            || isPublicEntryBoardEditor(projectId)
+            || (
+              'initiativeId' in existing()
+              && existing().initiativeId is string
+              && existing().initiativeId != ''
+              && (
+                isInitiativeEditor(projectId, existing().initiativeId)
+                || isPublicEntryInitiativeEditor(projectId, existing().initiativeId)
+                || hasInitiativePublicLinkEditor(projectId, existing().initiativeId)
+              )
+            )
+          );
+
+        // Task Verification Notes Subcollection
+        match /notes/{noteId} {
+          allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+          allow get: if isValidId(projectId)
+            && isValidId(taskId)
+            && isValidId(noteId)
+            && (
+              (isSignedIn() && existing().ownerId == request.auth.uid)
+              || canReadTask(projectId, taskId)
+            );
+          allow create: if isValidId(projectId)
+            && isValidId(taskId)
+            && isValidId(noteId)
+            && isValidNote(incoming())
+            && isValidActorOwner(incoming().ownerId)
+            && incoming().createdAt == request.time
+            && canEditTask(projectId, taskId);
+          allow update: if false;
+          allow delete: if isValidId(projectId)
+            && isValidId(taskId)
+            && isValidId(noteId)
+            && (
+              (isSignedIn() && existing().ownerId == request.auth.uid)
+              || canEditTask(projectId, taskId)
+            );
+        }
+
+        // Task Attachments Subcollection (Files & Links)
+        match /attachments/{attachmentId} {
+          allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+          allow get: if isValidId(projectId)
+            && isValidId(taskId)
+            && isValidId(attachmentId)
+            && (
+              (isSignedIn() && existing().ownerId == request.auth.uid)
+              || canReadTask(projectId, taskId)
+            );
+          allow create: if isValidId(projectId)
+            && isValidId(taskId)
+            && isValidId(attachmentId)
+            && isValidAttachment(incoming())
+            && isValidActorOwner(incoming().ownerId)
+            && incoming().createdAt == request.time
+            && canEditTask(projectId, taskId);
+          allow update: if false;
+          allow delete: if isValidId(projectId)
+            && isValidId(taskId)
+            && isValidId(attachmentId)
+            && (
+              (isSignedIn() && existing().ownerId == request.auth.uid)
+              || canEditTask(projectId, taskId)
+            );
+        }
+      }
+    }
+
+    // Direct App Link Public Entry Configuration
+    match /publicEntry/{entryId} {
+      allow list: if false;
+      allow get: if isValidId(entryId) && entryId == 'default';
+      allow create: if isSignedIn()
+        && isValidId(entryId)
+        && entryId == 'default'
+        && isValidPublicEntry(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && isBoardOwner(incoming().projectId);
+      allow update: if isSignedIn()
+        && isValidId(entryId)
+        && entryId == 'default'
+        && isValidPublicEntry(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'projectId', 'projectName', 'status', 'accessScope', 'role', 'initiativeIds', 'ownerName', 'updatedAt'
+        ]);
+      allow delete: if isSignedIn() && isValidId(entryId) && entryId == 'default' && existing().ownerId == request.auth.uid;
+    }
+
+    // Per-Initiative Sharing Invites
+    match /projectInvites/{inviteId} {
+      allow list: if (isSignedIn() && existing().ownerId == request.auth.uid)
+        || (
+          hasVerifiedEmail()
+          && existing().inviteType == 'email'
+          && existing().status == 'active'
+          && existing().invitedEmail == request.auth.token.email.lower()
+        );
+      allow get: if isValidId(inviteId)
+        && (
+          (existing().inviteType == 'link' && existing().status == 'active')
+          || (
+            isSignedIn()
+            && (
+              existing().ownerId == request.auth.uid
+              || (hasVerifiedEmail() && existing().inviteType == 'email' && existing().invitedEmail == request.auth.token.email.lower())
+            )
+          )
+        );
+      allow create: if isSignedIn()
+        && isValidId(inviteId)
+        && isValidProjectInvite(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/projects/$(incoming().projectId)/initiatives/$(incoming().initiativeId))
+        && get(/databases/$(database)/documents/projects/$(incoming().projectId)/initiatives/$(incoming().initiativeId)).data.ownerId == request.auth.uid;
+      allow update: if isSignedIn()
+        && isValidId(inviteId)
+        && isValidProjectInvite(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'status', 'updatedAt']);
+      allow delete: if isSignedIn() && isValidId(inviteId) && existing().ownerId == request.auth.uid;
+    }
+
+    // User Private Joined Initiatives Bookmarks
+    match /users/{userId}/joinedInitiatives/{joinId} {
+      allow list: if isSignedIn() && userId == request.auth.uid && existing().uid == request.auth.uid;
+      allow get: if isSignedIn() && isValidId(userId) && isValidId(joinId) && userId == request.auth.uid && existing().uid == request.auth.uid;
+      allow create: if isSignedIn()
+        && isValidId(userId)
+        && isValidId(joinId)
+        && userId == request.auth.uid
+        && isValidJoinedInitiative(incoming())
+        && incoming().uid == request.auth.uid
+        && joinId == incoming().projectId + '__' + incoming().initiativeId
+        && incoming().createdAt == request.time
+        && existsAfter(/databases/$(database)/documents/projects/$(incoming().projectId)/initiatives/$(incoming().initiativeId)/members/$(request.auth.uid));
+      allow update: if isSignedIn()
+        && isValidId(userId)
+        && isValidId(joinId)
+        && userId == request.auth.uid
+        && isValidJoinedInitiative(incoming())
+        && existing().uid == request.auth.uid
+        && incoming().uid == existing().uid
+        && incoming().projectId == existing().projectId
+        && incoming().initiativeId == existing().initiativeId
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'projectName', 'initiativeName']);
+      allow delete: if isSignedIn()
+        && isValidId(userId)
+        && isValidId(joinId)
+        && (userId == request.auth.uid || existing().ownerId == request.auth.uid);
+    }
+  }
+}
